@@ -1,0 +1,323 @@
+<?php
+/**
+ * @file
+ * Install/uninstall for MedRemind. Creates 7 database tables.
+ */
+
+function medremind_schema() {
+  $schema = array();
+
+  $schema['medremind_medications'] = array(
+    'description' => 'User medications.',
+    'fields' => array(
+      'med_id'     => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'uid'        => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'name'       => array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''),
+      'dosage'     => array('type' => 'varchar', 'length' => 100, 'not null' => TRUE, 'default' => ''),
+      'frequency'  => array('type' => 'varchar', 'length' => 50, 'not null' => TRUE, 'default' => 'daily'),
+      'times'      => array('type' => 'text', 'not null' => FALSE),
+      'start_date' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'end_date'   => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'notes'      => array('type' => 'text', 'not null' => FALSE),
+      'status'     => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 1),
+      'created'    => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'updated'    => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+    ),
+    'primary key' => array('med_id'),
+    'indexes' => array('uid_status' => array('uid', 'status')),
+  );
+
+  $schema['medremind_schedule'] = array(
+    'description' => 'Dose schedule times.',
+    'fields' => array(
+      'schedule_id'  => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'med_id'       => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'uid'          => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'dose_time'    => array('type' => 'varchar', 'length' => 10, 'not null' => TRUE, 'default' => '08:00'),
+      'days_of_week' => array('type' => 'varchar', 'length' => 50, 'not null' => TRUE, 'default' => 'all'),
+      'status'       => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 1),
+    ),
+    'primary key' => array('schedule_id'),
+    'indexes' => array('med_id' => array('med_id')),
+  );
+
+  $schema['medremind_log'] = array(
+    'description' => 'Dose history: taken/missed/skipped.',
+    'fields' => array(
+      'log_id'         => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'med_id'         => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'uid'            => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'scheduled_time' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'action'         => array('type' => 'varchar', 'length' => 20, 'not null' => TRUE, 'default' => ''),
+      'action_time'    => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'notes'          => array('type' => 'varchar', 'length' => 255, 'not null' => FALSE),
+    ),
+    'primary key' => array('log_id'),
+    'indexes' => array('uid_date' => array('uid', 'scheduled_time')),
+  );
+
+  $schema['medremind_reminders'] = array(
+    'description' => 'Queued email reminders.',
+    'fields' => array(
+      'reminder_id'   => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'uid'           => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'med_id'        => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'reminder_time' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'method'        => array('type' => 'varchar', 'length' => 20, 'not null' => TRUE, 'default' => 'email'),
+      'sent'          => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 0),
+      'created'       => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+    ),
+    'primary key' => array('reminder_id'),
+    'indexes' => array('sent' => array('sent')),
+  );
+
+  $schema['medremind_streaks'] = array(
+    'description' => 'Adherence streaks per medication.',
+    'fields' => array(
+      'streak_id'      => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'uid'            => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'med_id'         => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'current_streak' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'best_streak'    => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'last_taken'     => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+    ),
+    'primary key' => array('streak_id'),
+    'indexes' => array('uid_med' => array('uid', 'med_id')),
+  );
+
+  $schema['medremind_settings'] = array(
+    'description' => 'User preferences.',
+    'fields' => array(
+      'uid'             => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE),
+      'reminder_email'  => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 1),
+      'reminder_before' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 15),
+      'timezone'        => array('type' => 'varchar', 'length' => 50, 'not null' => TRUE, 'default' => 'UTC'),
+      'daily_summary'   => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 1),
+    ),
+    'primary key' => array('uid'),
+  );
+
+  // Table 7: Notifications (Step 9)
+  $schema['medremind_notifications'] = array(
+    'description' => 'On-site notifications for users.',
+    'fields' => array(
+      'notif_id' => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'uid'      => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'type'     => array('type' => 'varchar', 'length' => 50, 'not null' => TRUE, 'default' => 'reminder'),
+      'title'    => array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''),
+      'message'  => array('type' => 'text', 'not null' => TRUE),
+      'med_id'   => array('type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE, 'default' => NULL),
+      'is_read'  => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 0),
+      'created'  => array('type' => 'int', 'not null' => TRUE, 'default' => 0),
+    ),
+    'primary key' => array('notif_id'),
+    'indexes' => array('uid' => array('uid'), 'uid_unread' => array('uid', 'is_read')),
+  );
+
+  // Table 8: Prescriptions (Entity)
+  $schema['medremind_prescriptions'] = array(
+    'description' => 'Prescription records (Entity API).',
+    'fields' => array(
+      'prescription_id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Primary key.',
+      ),
+      'uid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'User who owns this prescription.',
+      ),
+      'med_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Linked medication ID.',
+      ),
+      'prescription_number' => array(
+        'type' => 'varchar',
+        'length' => 100,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Rx number.',
+      ),
+      'doctor_name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Prescribing doctor.',
+      ),
+      'pharmacy_name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Pharmacy name.',
+      ),
+      'prescribed_date' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Date prescribed.',
+      ),
+      'expiry_date' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Expiry date (0 = no expiry).',
+      ),
+      'refills_total' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Total refills allowed.',
+      ),
+      'refills_used' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Refills used so far.',
+      ),
+      'notes' => array(
+        'type' => 'text',
+        'not null' => FALSE,
+        'description' => 'Notes.',
+      ),
+      'status' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+        'description' => '1=active, 0=inactive.',
+      ),
+      'created' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'updated' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('prescription_id'),
+    'indexes' => array(
+      'uid' => array('uid'),
+      'med_id' => array('med_id'),
+      'uid_status' => array('uid', 'status'),
+    ),
+  );
+
+  return $schema;
+}
+
+function medremind_install() {
+  $defaults = array(
+    'medremind_site_name' => 'MedRemind',
+    'medremind_reminder_enabled' => 1,
+    'medremind_max_medications' => 20,
+    'medremind_streak_enabled' => 1,
+    'medremind_missed_dose_hours' => 4,
+    'medremind_log_retention_days' => 365,
+    'medremind_daily_summary_enabled' => 1,
+    'medremind_daily_summary_time' => '21:00',
+    'medremind_default_reminder_time' => 15,
+  );
+  foreach ($defaults as $k => $v) { variable_set($k, $v); }
+  drupal_set_message(t('MedRemind installed!'));
+}
+
+function medremind_uninstall() {
+  $vars = array(
+    'medremind_site_name',
+    'medremind_reminder_enabled',
+    'medremind_max_medications',
+    'medremind_allow_registration',
+    'medremind_default_reminder_time',
+    'medremind_daily_summary_enabled',
+    'medremind_daily_summary_time',
+    'medremind_streak_enabled',
+    'medremind_missed_dose_hours',
+    'medremind_log_retention_days',
+    'medremind_last_summary_date',
+  );
+  foreach ($vars as $v) {
+    variable_del($v);
+  }
+  drupal_set_message(t('MedRemind has been completely uninstalled.'));
+}
+
+/**
+ * Add medremind_notifications table.
+ */
+function medremind_update_7001() {
+  if (!db_table_exists('medremind_notifications')) {
+    $schema = array(
+      'fields' => array(
+        'notif_id' => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+        'uid'      => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'type'     => array('type' => 'varchar', 'length' => 50, 'not null' => TRUE, 'default' => 'reminder'),
+        'title'    => array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''),
+        'message'  => array('type' => 'text', 'not null' => TRUE),
+        'med_id'   => array('type' => 'int', 'unsigned' => TRUE, 'not null' => FALSE, 'default' => NULL),
+        'is_read'  => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 0),
+        'created'  => array('type' => 'int', 'not null' => TRUE, 'default' => 0),
+      ),
+      'primary key' => array('notif_id'),
+      'indexes' => array('uid' => array('uid'), 'uid_unread' => array('uid', 'is_read')),
+    );
+    db_create_table('medremind_notifications', $schema);
+  }
+  return t('Added medremind_notifications table.');
+}
+  /**
+ * Add medremind_prescriptions table.
+ */
+function medremind_update_7002() {
+  if (!db_table_exists('medremind_prescriptions')) {
+    $schema = array(
+      'fields' => array(
+        'prescription_id' => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+        'uid' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'med_id' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'prescription_number' => array('type' => 'varchar', 'length' => 100, 'not null' => TRUE, 'default' => ''),
+        'doctor_name' => array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''),
+        'pharmacy_name' => array('type' => 'varchar', 'length' => 255, 'not null' => TRUE, 'default' => ''),
+        'prescribed_date' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'expiry_date' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'refills_total' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'refills_used' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'notes' => array('type' => 'text', 'not null' => FALSE),
+        'status' => array('type' => 'int', 'size' => 'tiny', 'not null' => TRUE, 'default' => 1),
+        'created' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+        'updated' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      ),
+      'primary key' => array('prescription_id'),
+      'indexes' => array('uid' => array('uid'), 'med_id' => array('med_id'), 'uid_status' => array('uid', 'status')),
+    );
+    db_create_table('medremind_prescriptions', $schema);
+  }
+  return t('Added medremind_prescriptions table.');
+}
+/**
+ * Grant 'use medremind' to authenticated users.
+ */
+function medremind_update_7003() {
+  $role = user_role_load_by_name('authenticated user');
+  if ($role) {
+    user_role_grant_permissions($role->rid, array('use medremind'));
+  }
+  return t('Granted MedRemind access to authenticated users.');
+}

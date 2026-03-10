@@ -1,0 +1,477 @@
+<?php
+/**
+ * @file
+ * MedRemind — Medication Reminder SaaS for Drupal 7.
+ */
+
+define('MEDREMIND_STATUS_ACTIVE', 1);
+define('MEDREMIND_STATUS_PAUSED', 0);
+define('MEDREMIND_ACTION_TAKEN', 'taken');
+define('MEDREMIND_ACTION_MISSED', 'missed');
+define('MEDREMIND_ACTION_SKIPPED', 'skipped');
+
+// Email: FALSE = block emails on localhost, TRUE = send real emails
+if (!defined('MEDREMIND_SEND_EMAILS')) {
+  define('MEDREMIND_SEND_EMAILS', FALSE);
+}
+function medremind_init() {
+  global $user;
+
+  // Grant permission on every page load if not set
+  if ($user->uid > 0) {
+    $role = user_role_load_by_name('authenticated user');
+    if ($role) {
+      $has = db_select('role_permission', 'rp')
+        ->condition('rid', $role->rid)
+        ->condition('permission', 'use medremind')
+        ->countQuery()->execute()->fetchField();
+      if (!$has) {
+        user_role_grant_permissions($role->rid, array('use medremind'));
+        drupal_static_reset('user_access');
+        drupal_static_reset('user_role_permissions');
+      }
+    }
+  }
+
+  // Redirect anonymous users to login
+  if ($user->uid == 0) {
+    $path = current_path();
+    $protected = array(
+      'medremind', 'medremind/add', 'medremind/history', 'medremind/settings',
+      'medremind/reports', 'medremind/notifications', 'medremind/export',
+      'medremind/prescriptions', 'medremind/profile',
+    );
+    if (in_array($path, $protected)) {
+      drupal_goto('medremind/login', array('query' => array('destination' => $path)));
+    }
+  }
+}
+/**
+ * Implements hook_menu().
+ */
+function medremind_menu() {
+  $items = array();
+// Login (public — no permission needed)
+  $items['medremind/login'] = array(
+    'title' => 'Sign In',
+    'page callback' => 'medremind_login_page',
+    'access callback' => TRUE,
+    'file' => 'includes/medremind.user.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  // Register (public)
+  $items['medremind/register'] = array(
+    'title' => 'Create Account',
+    'page callback' => 'medremind_register_page',
+    'access callback' => TRUE,
+    'file' => 'includes/medremind.user.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  // Logout
+  $items['medremind/logout'] = array(
+    'title' => 'Logout',
+    'page callback' => 'medremind_logout_page',
+    'access callback' => 'user_is_logged_in',
+    'file' => 'includes/medremind.user.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  // Profile
+  $items['medremind/profile'] = array(
+    'title' => 'My Profile',
+    'page callback' => 'medremind_profile_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.user.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 8,
+  );
+
+  // Base route — this is the PARENT
+  $items['medremind'] = array(
+    'title' => 'My Medications',
+    'page callback' => 'medremind_dashboard_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.pages.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  // Default tab — Dashboard
+  $items['medremind/dashboard'] = array(
+    'title' => 'Dashboard',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 0,
+  );
+
+  // Tab: Add Medication
+  $items['medremind/add'] = array(
+    'title' => 'Add Medication',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('medremind_medication_form'),
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.forms.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+  );
+
+  // Tab: History
+  $items['medremind/history'] = array(
+    'title' => 'History',
+    'page callback' => 'medremind_history_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.pages.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 2,
+  );
+
+  // Tab: My Settings
+  $items['medremind/settings'] = array(
+    'title' => 'My Settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('medremind_user_settings_form'),
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.forms.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 3,
+  );
+
+  // Tab: Reports
+  $items['medremind/reports'] = array(
+    'title' => 'Reports',
+    'page callback' => 'medremind_reports_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.reports.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 4,
+  );
+
+  // Tab: Notifications
+  $items['medremind/notifications'] = array(
+    'title' => 'Notifications',
+    'page callback' => 'medremind_notifications_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.notifications.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 5,
+  );
+
+  // Tab: Export/Import
+  $items['medremind/export'] = array(
+    'title' => 'Export / Import',
+    'page callback' => 'medremind_export_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.export.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 6,
+  );
+
+  // Hidden routes (no tabs) — Edit/Delete/AJAX
+  $items['medremind/edit/%'] = array(
+    'title' => 'Edit Medication',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('medremind_medication_form', 2),
+    'access callback' => 'medremind_medication_access',
+    'access arguments' => array(2),
+    'file' => 'includes/medremind.forms.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['medremind/delete/%'] = array(
+    'title' => 'Delete Medication',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('medremind_delete_confirm_form', 2),
+    'access callback' => 'medremind_medication_access',
+    'access arguments' => array(2),
+    'file' => 'includes/medremind.forms.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  // AJAX endpoints
+  $items['medremind/take/%/ajax'] = array(
+    'page callback' => 'medremind_take_dose_ajax',
+    'page arguments' => array(2),
+    'access callback' => 'medremind_medication_access',
+    'access arguments' => array(2),
+    'file' => 'includes/medremind.ajax.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['medremind/skip/%/ajax'] = array(
+    'page callback' => 'medremind_skip_dose_ajax',
+    'page arguments' => array(2),
+    'access callback' => 'medremind_medication_access',
+    'access arguments' => array(2),
+    'file' => 'includes/medremind.ajax.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  // Notification AJAX
+  $items['medremind/notifications/read/ajax'] = array(
+    'page callback' => 'medremind_notifications_mark_read_ajax',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.notifications.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['medremind/notifications/count/ajax'] = array(
+    'page callback' => 'medremind_notifications_count_ajax',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.notifications.inc',
+    'type' => MENU_CALLBACK,
+  );
+  // Export/Import
+  $items['medremind/export'] = array(
+    'title' => 'Export / Import',
+    'page callback' => 'medremind_export_page',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.export.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['medremind/export/medications/csv'] = array(
+    'page callback' => 'medremind_export_medications_csv',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.export.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['medremind/export/history/csv'] = array(
+    'page callback' => 'medremind_export_history_csv',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.export.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['medremind/export/full/csv'] = array(
+    'page callback' => 'medremind_export_full_csv',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.export.inc',
+    'type' => MENU_CALLBACK,
+  );
+  $items['medremind/export/template/csv'] = array(
+    'page callback' => 'medremind_export_template_csv',
+    'access arguments' => array('use medremind'),
+    'file' => 'includes/medremind.export.inc',
+    'type' => MENU_CALLBACK,
+  );
+
+  // Admin Settings
+  $items['admin/config/medremind'] = array(
+    'title' => 'MedRemind Settings',
+    'description' => 'Configure MedRemind settings.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('medremind_admin_settings_form'),
+    'access arguments' => array('administer medremind'),
+    'file' => 'includes/medremind.admin.inc',
+  );
+
+  return $items;
+}
+
+
+/**
+ * Implements hook_permission().
+ */
+function medremind_permission() {
+  return array(
+    'administer medremind' => array('title' => t('Administer MedRemind')),
+    'use medremind' => array('title' => t('Use MedRemind')),
+  );
+}
+
+
+/**
+ * Implements hook_theme().
+ */
+function medremind_theme() {
+  $path = drupal_get_path('module', 'medremind') . '/templates';
+  return array(
+    'medremind_dashboard' => array(
+      'template' => 'medremind-dashboard', 'path' => $path,
+      'variables' => array('medications' => array(), 'stats' => array(), 'user_name' => ''),
+    ),
+    'medremind_med_card' => array(
+      'template' => 'medremind-med-card', 'path' => $path,
+      'variables' => array('medication' => NULL, 'next_dose' => '', 'streak' => 0),
+    ),
+    'medremind_history' => array(
+      'template' => 'medremind-history', 'path' => $path,
+      'variables' => array('logs' => array(), 'month' => '', 'adherence' => 0),
+    ),
+  );
+}
+
+
+/**
+ * Implements hook_help().
+ */
+function medremind_help($path, $arg) {
+  if ($path == 'admin/help#medremind') {
+    return '<p>' . t('MedRemind helps users track medications and receive reminders.') . '</p>';
+  }
+}
+
+
+/**
+ * Implements hook_cron().
+ */
+function medremind_cron() {
+  $loaded = module_load_include('inc', 'medremind', 'includes/medremind.cron');
+  if ($loaded) {
+    _medremind_process_reminders();
+  }
+}
+
+
+/**
+ * Implements hook_mail().
+ */
+function medremind_mail($key, &$message, $params) {
+  $site = variable_get('medremind_site_name', 'MedRemind');
+
+  if ($key == 'dose_reminder') {
+    $message['subject'] = t('[@site] Time to take @med', array(
+      '@site' => $site, '@med' => $params['med_name'],
+    ));
+    $message['body'][] = t("Hello,\n\nTime to take: @med (@dosage)\n\n— @site", array(
+      '@med' => $params['med_name'],
+      '@dosage' => $params['med_dosage'],
+      '@site' => $site,
+    ));
+  }
+
+  if ($key == 'daily_summary') {
+    $message['subject'] = t('[@site] Daily Summary', array('@site' => $site));
+    $message['body'][] = t("Today: Taken @t, Missed @m, Skipped @s\n\n— @site", array(
+      '@t' => $params['taken'],
+      '@m' => $params['missed'],
+      '@s' => $params['skipped'],
+      '@site' => $site,
+    ));
+  }
+}
+function medremind_mail_alter(&$message) {
+  if (!defined('MEDREMIND_SEND_EMAILS') || !MEDREMIND_SEND_EMAILS) {
+    // Block all medremind emails AND Drupal user emails on localhost
+    if (strpos($message['id'], 'medremind') === 0 || strpos($message['id'], 'user_') === 0) {
+      $message['send'] = FALSE;
+    }
+  }
+}
+
+
+/**
+ * Implements hook_block_info().
+ */
+function medremind_block_info() {
+  return array(
+    'next_dose' => array('info' => t('MedRemind: Next Dose'), 'cache' => DRUPAL_NO_CACHE),
+    'quick_stats' => array('info' => t('MedRemind: Quick Stats'), 'cache' => DRUPAL_NO_CACHE),
+    'medremind_notifications' => array('info' => t('MedRemind: Notifications'), 'cache' => DRUPAL_NO_CACHE),
+  );
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function medremind_block_view($delta = '') {
+  module_load_include('inc', 'medremind', 'includes/medremind.blocks');
+  if ($delta == 'next_dose') return _medremind_block_next_dose();
+  if ($delta == 'quick_stats') return _medremind_block_quick_stats();
+  if ($delta == 'medremind_notifications') {
+    if (user_access('use medremind')) {
+      return array('subject' => '', 'content' => _medremind_block_notifications());
+    }
+  }
+}
+
+
+/**
+ * Access callback: does current user own this medication?
+ */
+function medremind_medication_access($med_id) {
+  global $user;
+  if (!user_access('use medremind')) return FALSE;
+  if (user_access('administer medremind')) return TRUE;
+  if (!db_table_exists('medremind_medications')) return FALSE;
+  $owner = db_query('SELECT uid FROM {medremind_medications} WHERE med_id = :mid',
+    array(':mid' => $med_id))->fetchField();
+  return ($owner == $user->uid);
+}
+/**
+ * Implements hook_entity_info().
+ *
+ * This tells Drupal about our custom Prescription entity.
+ * Entity API module reads this and provides:
+ *   - entity_load(), entity_save(), entity_delete()
+ *   - Admin UI pages
+ *   - Views integration
+ *   - Fieldable support (attach fields via UI)
+ */
+function medremind_entity_info() {
+  $info = array();
+
+  $info['medremind_prescription'] = array(
+    // Basic info
+    'label' => t('Prescription'),
+    'plural label' => t('Prescriptions'),
+    'description' => t('Prescription records linked to medications.'),
+
+    // Entity class and controller
+    'entity class' => 'MedRemindPrescription',
+    'controller class' => 'MedRemindPrescriptionController',
+
+    // Database table
+    'base table' => 'medremind_prescriptions',
+
+    // Fieldable — allows attaching fields via UI
+    'fieldable' => TRUE,
+
+    // Keys — tells Drupal which columns are special
+    'entity keys' => array(
+      'id' => 'prescription_id',
+      'label' => 'prescription_number',
+    ),
+
+    // Bundle — we only have one type
+    'bundles' => array(
+      'medremind_prescription' => array(
+        'label' => t('Prescription'),
+        'admin' => array(
+          'path' => 'admin/structure/medremind-prescriptions',
+          'access arguments' => array('administer medremind'),
+        ),
+      ),
+    ),
+
+    // Admin UI — Entity API generates admin pages
+    'admin ui' => array(
+      'path' => 'medremind/prescription',
+      'controller class' => 'MedRemindPrescriptionUIController',
+      'file' => 'includes/medremind.prescription.pages.inc',
+    ),
+
+    // Access callback
+    'access callback' => 'medremind_prescription_access',
+
+    // Module
+    'module' => 'medremind',
+  );
+
+  return $info;
+}
+
+
+/**
+ * Access callback for prescription entity.
+ */
+function medremind_prescription_access($op, $entity = NULL, $account = NULL) {
+  if (user_access('administer medremind', $account)) {
+    return TRUE;
+  }
+  if (user_access('use medremind', $account)) {
+    if ($op == 'create') return TRUE;
+    if ($entity && isset($entity->uid)) {
+      global $user;
+      $check_account = $account ? $account : $user;
+      return ($entity->uid == $check_account->uid);
+    }
+    return TRUE;
+  }
+  return FALSE;
+}

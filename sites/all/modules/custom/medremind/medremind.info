@@ -1,0 +1,13 @@
+name = MedRemind
+description = "Medication reminder SaaS — track medications, schedules, adherence, notifications, reports, and CSV export/import."
+core = 7.x
+package = MedRemind
+
+dependencies[] = entity
+
+stylesheets[all][] = medremind.css
+scripts[] = js/medremind.js
+files[] = medremind.test
+files[] = includes/medremind.entity.inc
+
+configure = admin/config/medremind

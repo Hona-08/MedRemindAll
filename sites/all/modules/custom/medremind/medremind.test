@@ -1,0 +1,530 @@
+<?php
+/**
+ * @file
+ * Tests for MedRemind module.
+ *
+ * TO RUN:
+ *   Admin → Configuration → Development → Testing
+ *   Check "MedRemind" group → Run tests
+ */
+
+
+/**
+ * Test 1: Module installs correctly.
+ */
+class MedRemindInstallTestCase extends DrupalWebTestCase {
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Installation',
+      'description' => 'Test that MedRemind installs and creates database tables.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+  }
+
+  public function testTablesExist() {
+    $tables = array(
+      'medremind_medications',
+      'medremind_schedule',
+      'medremind_log',
+      'medremind_reminders',
+      'medremind_streaks',
+      'medremind_settings',
+      'medremind_notifications',
+      'medremind_prescriptions',
+    );
+    foreach ($tables as $table) {
+      $this->assertTrue(db_table_exists($table),
+        t('Table @table exists.', array('@table' => $table)));
+    }
+  }
+
+  public function testDefaultVariables() {
+    $this->assertEqual(variable_get('medremind_site_name', ''), 'MedRemind',
+      'Default site name is set.');
+    $this->assertEqual(variable_get('medremind_reminder_enabled', 0), 1,
+      'Reminders enabled by default.');
+    $this->assertEqual(variable_get('medremind_max_medications', 0), 20,
+      'Default max medications is 20.');
+  }
+
+  public function testPermissionsExist() {
+    $permissions = module_invoke('medremind', 'permission');
+    $this->assertTrue(isset($permissions['use medremind']), 'Permission "use medremind" defined.');
+    $this->assertTrue(isset($permissions['administer medremind']), 'Permission "administer medremind" defined.');
+  }
+}
+
+
+/**
+ * Test 2: Access control.
+ */
+class MedRemindAccessTestCase extends DrupalWebTestCase {
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Access Control',
+      'description' => 'Test page access with different user roles.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+  }
+
+  public function testAnonymousAccessDenied() {
+    $this->drupalGet('medremind');
+    $this->assertResponse(403, 'Anonymous user gets 403 on dashboard.');
+  }
+
+  public function testAnonymousCannotAdd() {
+    $this->drupalGet('medremind/add');
+    $this->assertResponse(403, 'Anonymous user gets 403 on add form.');
+  }
+
+  public function testAuthorizedUserAccess() {
+    $user = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($user);
+    $this->drupalGet('medremind');
+    $this->assertResponse(200, 'Authorized user can access dashboard.');
+  }
+
+  public function testUnauthorizedUserDenied() {
+    $user = $this->drupalCreateUser(array());
+    $this->drupalLogin($user);
+    $this->drupalGet('medremind');
+    $this->assertResponse(403, 'User without permission gets 403.');
+  }
+
+  public function testRegularUserCannotAccessAdmin() {
+    $user = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($user);
+    $this->drupalGet('admin/config/medremind');
+    $this->assertResponse(403, 'Regular user cannot access admin settings.');
+  }
+
+  public function testAdminCanAccessSettings() {
+    $admin = $this->drupalCreateUser(array('administer medremind'));
+    $this->drupalLogin($admin);
+    $this->drupalGet('admin/config/medremind');
+    $this->assertResponse(200, 'Admin can access settings page.');
+  }
+}
+
+
+/**
+ * Test 3: Medication CRUD.
+ */
+class MedRemindMedicationCRUDTestCase extends DrupalWebTestCase {
+
+  protected $testUser;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Medication CRUD',
+      'description' => 'Test adding, editing, and deleting medications.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+    $this->testUser = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($this->testUser);
+  }
+
+  public function testAddFormLoads() {
+    $this->drupalGet('medremind/add');
+    $this->assertResponse(200, 'Add medication page loads.');
+    $this->assertFieldByName('name', '', 'Name field exists.');
+    $this->assertFieldByName('dosage', '', 'Dosage field exists.');
+    $this->assertFieldByName('frequency', 'once_daily', 'Frequency field has default.');
+  }
+
+  public function testAddMedication() {
+    $edit = array(
+      'name' => 'Paracetamol',
+      'dosage' => '500mg',
+      'frequency' => 'twice_daily',
+      'time_1' => '08:00',
+      'time_2' => '20:00',
+      'notes' => 'Take after meals',
+    );
+
+    $this->drupalPost('medremind/add', $edit, t('Add Medication'));
+    $this->assertText('added', 'Success message shown.');
+    $this->assertUrl('medremind', array(), 'Redirected to dashboard.');
+    $this->assertText('Paracetamol', 'Medication name on dashboard.');
+    $this->assertText('500mg', 'Dosage on dashboard.');
+
+    $count = db_select('medremind_medications', 'm')
+      ->condition('m.uid', $this->testUser->uid)
+      ->condition('m.name', 'Paracetamol')
+      ->countQuery()->execute()->fetchField();
+    $this->assertEqual($count, 1, 'Medication saved to database.');
+  }
+
+  public function testValidationEmptyName() {
+    $edit = array(
+      'name' => '',
+      'dosage' => '500mg',
+      'time_1' => '08:00',
+    );
+    $this->drupalPost('medremind/add', $edit, t('Add Medication'));
+    $this->assertText('required', 'Empty name shows error.');
+  }
+
+  public function testValidationShortName() {
+    $edit = array(
+      'name' => 'A',
+      'dosage' => '500mg',
+      'time_1' => '08:00',
+    );
+    $this->drupalPost('medremind/add', $edit, t('Add Medication'));
+    $this->assertText('at least 2 characters', 'Short name shows error.');
+  }
+
+  public function testValidationInvalidTime() {
+    $edit = array(
+      'name' => 'Aspirin',
+      'dosage' => '100mg',
+      'time_1' => '25:00',
+    );
+    $this->drupalPost('medremind/add', $edit, t('Add Medication'));
+    $this->assertText('HH:MM', 'Invalid time shows error.');
+  }
+
+  public function testEditMedication() {
+    $med_id = db_insert('medremind_medications')->fields(array(
+      'uid' => $this->testUser->uid, 'name' => 'Original Name', 'dosage' => '100mg',
+      'frequency' => 'once_daily', 'times' => '["08:00"]', 'start_date' => REQUEST_TIME,
+      'end_date' => 0, 'status' => 1, 'created' => REQUEST_TIME, 'updated' => REQUEST_TIME,
+    ))->execute();
+
+    $this->drupalGet('medremind/edit/' . $med_id);
+    $this->assertResponse(200, 'Edit page loads.');
+    $this->assertFieldByName('name', 'Original Name', 'Name pre-filled.');
+
+    $edit = array('name' => 'Updated Name', 'dosage' => '200mg', 'time_1' => '09:00');
+    $this->drupalPost('medremind/edit/' . $med_id, $edit, t('Update Medication'));
+    $this->assertText('updated', 'Update success message.');
+
+    $updated = db_query('SELECT name FROM {medremind_medications} WHERE med_id = :id',
+      array(':id' => $med_id))->fetchField();
+    $this->assertEqual($updated, 'Updated Name', 'Name updated in database.');
+  }
+
+  public function testDeleteMedication() {
+    $med_id = db_insert('medremind_medications')->fields(array(
+      'uid' => $this->testUser->uid, 'name' => 'Delete Me', 'dosage' => '50mg',
+      'frequency' => 'once_daily', 'times' => '["08:00"]', 'start_date' => REQUEST_TIME,
+      'end_date' => 0, 'status' => 1, 'created' => REQUEST_TIME, 'updated' => REQUEST_TIME,
+    ))->execute();
+
+    $this->drupalGet('medremind/delete/' . $med_id);
+    $this->assertResponse(200, 'Delete confirmation loads.');
+    $this->assertText('Are you sure', 'Confirmation shown.');
+
+    $this->drupalPost('medremind/delete/' . $med_id, array(), t('Delete'));
+    $this->assertText('deleted', 'Delete success message.');
+
+    $exists = db_query('SELECT COUNT(*) FROM {medremind_medications} WHERE med_id = :id',
+      array(':id' => $med_id))->fetchField();
+    $this->assertEqual($exists, 0, 'Medication removed from database.');
+  }
+
+  public function testCannotEditOtherUserMed() {
+    $med_id = db_insert('medremind_medications')->fields(array(
+      'uid' => $this->testUser->uid, 'name' => 'Private Med', 'dosage' => '10mg',
+      'frequency' => 'once_daily', 'times' => '["08:00"]', 'start_date' => REQUEST_TIME,
+      'end_date' => 0, 'status' => 1, 'created' => REQUEST_TIME, 'updated' => REQUEST_TIME,
+    ))->execute();
+
+    $otherUser = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($otherUser);
+    $this->drupalGet('medremind/edit/' . $med_id);
+    $this->assertResponse(403, 'Other user cannot edit.');
+  }
+}
+
+
+/**
+ * Test 4: Dashboard display.
+ */
+class MedRemindDashboardTestCase extends DrupalWebTestCase {
+
+  protected $testUser;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Dashboard',
+      'description' => 'Test dashboard displays correct content.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+    $this->testUser = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($this->testUser);
+  }
+
+  public function testEmptyDashboard() {
+    $this->drupalGet('medremind');
+    $this->assertResponse(200, 'Dashboard loads.');
+    $this->assertText('No medications yet', 'Empty state shown.');
+  }
+
+  public function testDashboardShowsMedication() {
+    db_insert('medremind_medications')->fields(array(
+      'uid' => $this->testUser->uid, 'name' => 'Vitamin C', 'dosage' => '1000mg',
+      'frequency' => 'once_daily', 'times' => '["09:00"]', 'start_date' => REQUEST_TIME,
+      'end_date' => 0, 'status' => 1, 'created' => REQUEST_TIME, 'updated' => REQUEST_TIME,
+    ))->execute();
+
+    $this->drupalGet('medremind');
+    $this->assertText('Vitamin C', 'Medication name shown.');
+    $this->assertText('1000mg', 'Dosage shown.');
+    $this->assertText('Take', 'Take button present.');
+  }
+
+  public function testHistoryPage() {
+    $this->drupalGet('medremind/history');
+    $this->assertResponse(200, 'History page loads.');
+    $this->assertText('Adherence', 'Adherence section shown.');
+  }
+
+  public function testSettingsPage() {
+    $this->drupalGet('medremind/settings');
+    $this->assertResponse(200, 'Settings page loads.');
+  }
+
+  public function testReportsPage() {
+    $this->drupalGet('medremind/reports');
+    $this->assertResponse(200, 'Reports page loads.');
+    $this->assertText('Reports', 'Reports heading shown.');
+  }
+
+  public function testNotificationsPage() {
+    $this->drupalGet('medremind/notifications');
+    $this->assertResponse(200, 'Notifications page loads.');
+    $this->assertText('Notifications', 'Notifications heading shown.');
+  }
+
+  public function testExportPage() {
+    $this->drupalGet('medremind/export');
+    $this->assertResponse(200, 'Export page loads.');
+    $this->assertText('Export', 'Export heading shown.');
+  }
+
+  public function testPrescriptionsPage() {
+    $this->drupalGet('medremind/prescriptions');
+    $this->assertResponse(200, 'Prescriptions page loads.');
+    $this->assertText('Prescriptions', 'Prescriptions heading shown.');
+  }
+}
+
+
+/**
+ * Test 5: AJAX Take/Skip.
+ */
+class MedRemindAjaxTestCase extends DrupalWebTestCase {
+
+  protected $testUser;
+  protected $medId;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Take/Skip Actions',
+      'description' => 'Test AJAX take and skip dose functionality.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+    $this->testUser = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($this->testUser);
+
+    $this->medId = db_insert('medremind_medications')->fields(array(
+      'uid' => $this->testUser->uid, 'name' => 'Test Med', 'dosage' => '50mg',
+      'frequency' => 'once_daily', 'times' => '["08:00"]', 'start_date' => REQUEST_TIME,
+      'end_date' => 0, 'status' => 1, 'created' => REQUEST_TIME, 'updated' => REQUEST_TIME,
+    ))->execute();
+
+    db_insert('medremind_streaks')->fields(array(
+      'uid' => $this->testUser->uid, 'med_id' => $this->medId,
+      'current_streak' => 0, 'best_streak' => 0, 'last_taken' => 0,
+    ))->execute();
+  }
+
+  public function testTakeDose() {
+    $this->drupalGet('medremind/take/' . $this->medId . '/ajax');
+    $response = drupal_json_decode($this->drupalGetContent());
+    $this->assertEqual($response['status'], 'ok', 'Take returns ok.');
+    $this->assertEqual($response['action'], 'taken', 'Action is taken.');
+
+    $log = db_select('medremind_log', 'l')->fields('l')
+      ->condition('l.med_id', $this->medId)->condition('l.action', 'taken')
+      ->execute()->fetchObject();
+    $this->assertNotNull($log, 'Log entry created.');
+  }
+
+  public function testSkipDose() {
+    $this->drupalGet('medremind/skip/' . $this->medId . '/ajax');
+    $response = drupal_json_decode($this->drupalGetContent());
+    $this->assertEqual($response['status'], 'ok', 'Skip returns ok.');
+    $this->assertEqual($response['action'], 'skipped', 'Action is skipped.');
+  }
+
+  public function testStreakUpdates() {
+    $this->drupalGet('medremind/take/' . $this->medId . '/ajax');
+    $streak = db_select('medremind_streaks', 's')
+      ->fields('s', array('current_streak'))
+      ->condition('s.med_id', $this->medId)
+      ->execute()->fetchField();
+    $this->assertEqual($streak, 1, 'Streak set to 1 after take.');
+  }
+
+  public function testSkipResetsStreak() {
+    db_update('medremind_streaks')->fields(array('current_streak' => 5))
+      ->condition('med_id', $this->medId)->execute();
+
+    $this->drupalGet('medremind/skip/' . $this->medId . '/ajax');
+    $streak = db_select('medremind_streaks', 's')
+      ->fields('s', array('current_streak'))
+      ->condition('s.med_id', $this->medId)
+      ->execute()->fetchField();
+    $this->assertEqual($streak, 0, 'Streak reset to 0 after skip.');
+  }
+
+  public function testCannotTakeOtherUserMed() {
+    $otherUser = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($otherUser);
+    $this->drupalGet('medremind/take/' . $this->medId . '/ajax');
+    $this->assertResponse(403, 'Cannot take another user dose.');
+  }
+}
+
+
+/**
+ * Test 6: Admin settings.
+ */
+class MedRemindAdminTestCase extends DrupalWebTestCase {
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Admin Settings',
+      'description' => 'Test admin configuration page.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+  }
+
+  public function testSaveSettings() {
+    $admin = $this->drupalCreateUser(array('administer medremind'));
+    $this->drupalLogin($admin);
+
+    $edit = array(
+      'medremind_site_name' => 'My Pharmacy App',
+      'medremind_max_medications' => 50,
+    );
+    $this->drupalPost('admin/config/medremind', $edit, t('Save configuration'));
+    $this->assertText('saved', 'Settings saved message.');
+    $this->assertEqual(variable_get('medremind_site_name', ''), 'My Pharmacy App', 'Site name saved.');
+  }
+
+  public function testStatisticsDisplay() {
+    $admin = $this->drupalCreateUser(array('administer medremind'));
+    $this->drupalLogin($admin);
+    $this->drupalGet('admin/config/medremind');
+    $this->assertText('Users', 'Statistics shows Users.');
+    $this->assertText('Medications', 'Statistics shows Medications.');
+  }
+}
+
+
+/**
+ * Test 7: Prescription Entity.
+ */
+class MedRemindPrescriptionTestCase extends DrupalWebTestCase {
+
+  protected $testUser;
+
+  public static function getInfo() {
+    return array(
+      'name' => 'MedRemind Prescriptions',
+      'description' => 'Test Prescription entity CRUD.',
+      'group' => 'MedRemind',
+    );
+  }
+
+  public function setUp() {
+    parent::setUp(array('entity', 'medremind'));
+    $this->testUser = $this->drupalCreateUser(array('use medremind'));
+    $this->drupalLogin($this->testUser);
+  }
+
+  public function testPrescriptionsPageLoads() {
+    $this->drupalGet('medremind/prescriptions');
+    $this->assertResponse(200, 'Prescriptions page loads.');
+    $this->assertText('No prescriptions yet', 'Empty state shown.');
+  }
+
+  public function testCreatePrescriptionEntity() {
+    // Create via Entity API directly
+    $values = array(
+      'uid' => $this->testUser->uid,
+      'prescription_number' => 'RX-12345',
+      'doctor_name' => 'Dr. Smith',
+      'pharmacy_name' => 'City Pharmacy',
+      'prescribed_date' => REQUEST_TIME,
+      'expiry_date' => REQUEST_TIME + (365 * 86400),
+      'refills_total' => 5,
+      'refills_used' => 1,
+      'notes' => 'Test prescription',
+      'status' => 1,
+    );
+
+    $prescription = entity_create('medremind_prescription', $values);
+    entity_save('medremind_prescription', $prescription);
+
+    $this->assertNotNull($prescription->prescription_id, 'Prescription created with ID.');
+
+    // Load it back
+    $loaded = entity_load_single('medremind_prescription', $prescription->prescription_id);
+    $this->assertEqual($loaded->prescription_number, 'RX-12345', 'Prescription number matches.');
+    $this->assertEqual($loaded->doctor_name, 'Dr. Smith', 'Doctor name matches.');
+    $this->assertEqual($loaded->refills_total, 5, 'Refills total matches.');
+  }
+
+  public function testEntityDelete() {
+    $values = array(
+      'uid' => $this->testUser->uid,
+      'prescription_number' => 'RX-DELETE-ME',
+      'doctor_name' => 'Dr. Test',
+      'status' => 1,
+    );
+    $rx = entity_create('medremind_prescription', $values);
+    entity_save('medremind_prescription', $rx);
+    $id = $rx->prescription_id;
+
+    entity_delete('medremind_prescription', $id);
+
+    $exists = db_query('SELECT COUNT(*) FROM {medremind_prescriptions} WHERE prescription_id = :id',
+      array(':id' => $id))->fetchField();
+    $this->assertEqual($exists, 0, 'Prescription deleted from database.');
+  }
+
+  public function testPrescriptionTableExists() {
+    $this->assertTrue(db_table_exists('medremind_prescriptions'), 'Prescriptions table exists.');
+  }
+}
