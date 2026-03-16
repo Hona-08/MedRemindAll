@@ -171,7 +171,7 @@ ul.action-links {
   border-bottom-color: rgba(255, 255, 255, 0.5);
 }
 
-#main-menu-links li a.active,
+/* #main-menu-links li a.active, */
 #main-menu-links li a.active-trail {
   color: #fff !important;
   border-bottom-color: #fff;
